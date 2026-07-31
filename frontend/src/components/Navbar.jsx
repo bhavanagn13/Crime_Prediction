@@ -1,35 +1,44 @@
-export default function Navbar() {
+import { FiMenu } from "react-icons/fi";
+
+export default function Navbar({ onMenuClick }) {
   return (
-    <header className="bg-white shadow px-8 py-5 flex justify-between items-center">
+    <header className="bg-white shadow-sm border-b px-6 py-4 flex justify-between items-center">
 
-      <div>
+      {/* Left Section */}
 
-        <h2 className="text-2xl font-semibold">
+      <div className="flex items-center gap-4">
 
-          Crime Intelligence Dashboard
+        <button
+          onClick={onMenuClick}
+          className="p-2 rounded-lg hover:bg-slate-100 transition"
+        >
+          <FiMenu size={24} />
+        </button>
 
-        </h2>
+        <div>
 
-        <p className="text-gray-500">
+          <h2 className="text-2xl font-semibold text-slate-800">
+            Crime Intelligence Dashboard
+          </h2>
 
-          AI-Based Predictive Crime Analysis
-
-        </p>
-
-      </div>
-
-      <div className="text-right">
-
-        <div className="font-semibold">
-
-          Administrator
+          <p className="text-gray-500">
+            AI-Based Predictive Crime Analysis
+          </p>
 
         </div>
 
+      </div>
+
+      {/* Right Section */}
+
+      <div className="text-right">
+
+        <div className="font-semibold text-slate-700">
+          Administrator
+        </div>
+
         <div className="text-sm text-gray-500">
-
           Bengaluru City Police
-
         </div>
 
       </div>

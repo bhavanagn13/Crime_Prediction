@@ -121,7 +121,7 @@ if (hotspots.length > 0) {
       center={[12.9716, 77.5946]}
       zoom={11}
       style={{
-        height: "650px",
+        height: "75vh",
         width: "100%",
         borderRadius: "12px",
       }}

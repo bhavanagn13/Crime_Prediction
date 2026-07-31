@@ -3,14 +3,22 @@ import api from "../services/api";
 
 import DashboardLayout from "../layouts/DashboardLayout";
 import DashboardCard from "../components/DashboardCard";
+import DashboardChart from "../components/DashboardChart";
+import CrimeTrendChart from "../components/charts/CrimeTrendChart";
+import DashboardMap from "../components/maps/DashboardMap";
+import LSTMPredictionDistribution from "../components/models/LSTMPredictionDistribution";
 
 export default function AdminDashboard() {
     const [stats, setStats] = useState({
     total_grids: 0,
-    high: 0,
-    medium: 0,
-    low: 0,
+    high_risk: 0,
+    medium_risk: 0,
+    low_risk: 0,
+    citizen_reports: 0,
+    police_stations: 0,
 });
+
+    const [trendData, setTrendData] = useState([]);
 
     useEffect(() => {
 
@@ -18,9 +26,11 @@ export default function AdminDashboard() {
 
         try {
 
-            const response = await api.get("/statistics");
+            const response = await api.get("/dashboard-analytics");
 
-            setStats(response.data);
+            setStats(response.data.cards);
+
+setTrendData(response.data.crime_trend);
 
         }
 
@@ -52,7 +62,7 @@ export default function AdminDashboard() {
 
 </p>
 
-<div className="grid grid-cols-4 gap-6 mt-8">
+<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mt-8">
 
     <DashboardCard
         title="Total Grids"
@@ -62,26 +72,56 @@ export default function AdminDashboard() {
 
     <DashboardCard
         title="High Risk"
-        value={stats.high}
+        value={stats.high_risk}
         color="#DC2626"
     />
 
     <DashboardCard
         title="Medium Risk"
-        value={stats.medium}
+        value={stats.medium_risk}
         color="#F59E0B"
     />
 
     <DashboardCard
         title="Low Risk"
-        value={stats.low}
+        value={stats.low_risk}
         color="#16A34A"
     />
 
-</div>
+    <DashboardCard
+    title="Citizen Reports"
+    value={stats.citizen_reports}
+    color="#7C3AED"
+/>
+
+<DashboardCard
+    title="Police Stations"
+    value={stats.police_stations}
+    color="#4338CA"
+/>
 
 </div>
 
+<div className="grid grid-cols-2 gap-6 mt-8">
+
+    <DashboardChart title="Crime Trend">
+
+        <CrimeTrendChart
+            data={trendData}
+        />
+
+    </DashboardChart>
+
+   <DashboardChart title="AI Predicted Risk Distribution">
+
+    <LSTMPredictionDistribution />
+
+</DashboardChart>
+
+</div>
+</div>
+     <DashboardMap />
     </DashboardLayout>
+    
   );
 }

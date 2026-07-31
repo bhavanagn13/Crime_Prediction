@@ -19,3 +19,12 @@ data/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Cache
+backend/cache/
+
+backend/test_*.py

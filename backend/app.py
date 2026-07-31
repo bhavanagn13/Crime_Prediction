@@ -1,20 +1,24 @@
 from flask import Flask, request, jsonify
 from patrol import recommend_patrols
+from community import community_bp
 import pandas as pd
 import os
 from flask_cors import CORS
-
+from db import get_connection
 from model_loader import (
     load_lstm_model,
     load_gcn_model,
     load_hawkes_dataset,
     load_graph
 )
-
 from prediction import CrimePredictor
+from sklearn.neighbors import KernelDensity
+import numpy as np
+import json
 
 app = Flask(__name__)
 CORS(app)
+app.register_blueprint(community_bp)
 # ==========================================================
 # PATHS
 # ==========================================================
@@ -83,6 +87,48 @@ grid_map["Grid_ID"] = (
     .str.strip()
 )
 
+grid_coordinates = pd.read_csv(
+    os.path.join(
+        DATASET_PATH,
+        "corrected_grid_coords.csv"
+    )
+)
+
+grid_coordinates["Grid_ID"] = (
+    grid_coordinates["Grid_ID"]
+    .astype(str)
+    .str.strip()
+)
+
+# ==========================================================
+# LOAD GCN DATA
+# ==========================================================
+
+gcn_nodes = pd.read_csv(
+    os.path.join(DATASET_PATH, "GCN_Node_Features.csv")
+)
+
+gcn_edges = pd.read_csv(
+    os.path.join(DATASET_PATH, "GCN_Edges.csv")
+)
+
+gcn_nodes["Grid_ID"] = (
+    gcn_nodes["Grid_ID"]
+    .astype(str)
+    .str.strip()
+)
+
+gcn_edges["Source"] = (
+    gcn_edges["Source"]
+    .astype(str)
+    .str.strip()
+)
+
+gcn_edges["Target"] = (
+    gcn_edges["Target"]
+    .astype(str)
+    .str.strip()
+)
 # ==========================================================
 # LOAD WEEKLY HISTORY
 # ==========================================================
@@ -93,6 +139,8 @@ history_full = pd.read_csv(
         "Weekly_Risk_Dataset.csv"
     )
 )
+
+print(history_full.columns.tolist())
 
 history_full["Grid_ID"] = (
     history_full["Grid_ID"]
@@ -107,6 +155,9 @@ MAX_CRIME_VAL = float(
 # ==========================================================
 # LOAD MODELS
 # ==========================================================
+
+hawkes_df = load_hawkes_dataset()
+print(hawkes_df.columns.tolist())
 
 predictor = CrimePredictor(
     load_lstm_model(),
@@ -322,7 +373,58 @@ def generate_prediction_cache():
     print("========================================\n")
 
     return prediction_cache
+def generate_heatmap_data():
 
+    global history_full, grid_coordinates
+
+    # Historical crime count per grid
+    heatmap_df = (
+        history_full
+        .groupby("Grid_ID", as_index=False)["Crime_Count"]
+        .sum()
+    )
+
+    heatmap_df["Grid_ID"] = (
+        heatmap_df["Grid_ID"]
+        .astype(str)
+        .str.strip()
+    )
+
+    merged = heatmap_df.merge(
+        grid_coordinates,
+        on="Grid_ID",
+        how="inner"
+    )
+
+    coords = merged[["Latitude", "Longitude"]].values
+
+    # Weight each point by crime count
+    sample_weights = merged["Crime_Count"].values
+
+    kde = KernelDensity(
+        kernel="gaussian",
+        bandwidth=0.01
+    )
+
+    kde.fit(coords, sample_weight=sample_weights)
+
+    log_density = kde.score_samples(coords)
+
+    density = np.exp(log_density)
+
+    density = density / density.max()
+
+    merged["Density"] = density
+
+    return [
+        {
+            "grid_id": row.Grid_ID,
+            "lat": float(row.Latitude),
+            "lng": float(row.Longitude),
+            "weight": float(row.Density)
+        }
+        for row in merged.itertuples()
+    ]
 # ==========================================================
 # PREDICT SINGLE GRID
 # ==========================================================
@@ -391,9 +493,270 @@ def predict_all():
 #     print("Finished!")
 
 #     return jsonify(results)
+@app.route("/gcn-graph", methods=["GET"])
+def gcn_graph():
 
+    predictions = generate_prediction_cache()
 
+    prediction_map = {
+        p["grid_id"]: p
+        for p in predictions
+    }
 
+    # -------------------------------------------------
+    # Split by risk
+    # -------------------------------------------------
+
+    high = []
+    medium = []
+    low = []
+
+    for p in predictions:
+
+        if p["risk_level"] == 2:
+            high.append(p["grid_id"])
+
+        elif p["risk_level"] == 1:
+            medium.append(p["grid_id"])
+
+        else:
+            low.append(p["grid_id"])
+
+    selected = set()
+
+    selected.update(high[:10])
+    selected.update(medium[:10])
+    selected.update(low[:10])
+
+    # -------------------------------------------------
+    # Build Nodes (with coordinates)
+    # -------------------------------------------------
+
+    nodes = []
+
+    for grid in selected:
+
+        p = prediction_map[grid]
+
+        coord = grid_locations[
+            grid_locations["Grid_ID"] == grid
+        ]
+
+        if coord.empty:
+            continue
+
+        lat = float(coord.iloc[0]["Latitude"])
+        lng = float(coord.iloc[0]["Longitude"])
+
+        # Ignore invalid coordinates
+        if not (
+            12.7 <= lat <= 13.2 and
+            77.3 <= lng <= 77.9
+        ):
+            continue
+
+        nodes.append({
+
+            "id": grid,
+
+            "risk": p["risk_level"],
+
+            "station": p["police_station"],
+
+            "area": p["area_name"],
+
+            "lat": lat,
+
+            "lng": lng
+
+        })
+
+    # -------------------------------------------------
+    # Remove edges whose nodes don't exist
+    # -------------------------------------------------
+
+    valid_ids = {
+        node["id"]
+        for node in nodes
+    }
+
+    links = []
+
+    for row in gcn_edges.itertuples():
+
+        src = row.Source
+        dst = row.Target
+
+        if (
+            src in valid_ids and
+            dst in valid_ids
+        ):
+
+            links.append({
+
+                "source": src,
+
+                "target": dst
+
+            })
+
+    return jsonify({
+
+        "nodes": nodes,
+
+        "links": links
+
+    })
+
+@app.route("/hawkes-heatmap", methods=["GET"])
+def hawkes_heatmap():
+
+    global hawkes_df
+
+    df = hawkes_df.copy()
+    # Remove old coordinates from Hawkes dataset
+    df = df.drop(
+    columns=["Latitude", "Longitude"],
+    errors="ignore"
+)
+    # -----------------------------------------
+    # Clean IDs
+    # -----------------------------------------
+
+    df["Grid_ID"] = (
+        df["Grid_ID"]
+        .astype(str)
+        .str.strip()
+    )
+
+    # -----------------------------------------
+    # Latest Hawkes value per grid
+    # -----------------------------------------
+
+    if "Date" in df.columns:
+
+        df["Date"] = pd.to_datetime(df["Date"])
+
+        df = (
+            df.sort_values("Date")
+              .groupby("Grid_ID", as_index=False)
+              .tail(1)
+        )
+        # -----------------------------------------
+        # Use corrected Bengaluru coordinates
+       # -----------------------------------------
+
+        valid_coords = grid_locations[
+    [
+        "Grid_ID",
+        "Latitude",
+        "Longitude"
+    ]
+].copy()
+
+        valid_coords["Grid_ID"] = (
+        valid_coords["Grid_ID"]
+       .astype(str)
+       .str.strip()
+)
+
+        df = df.merge(
+    valid_coords,
+    on="Grid_ID",
+    how="inner"
+)
+
+        df = df.dropna(
+    subset=[
+        "Latitude",
+        "Longitude",
+        "Hawkes_Intensity"
+    ]
+)
+    # Bengaluru Bounding Box
+    df = df[
+        (df["Latitude"].between(12.7, 13.2)) &
+        (df["Longitude"].between(77.3, 77.9))
+    ]
+
+    # -----------------------------------------
+    # Normalize intensity to 0–10
+    # -----------------------------------------
+
+    maximum = df["Hawkes_Intensity"].max()
+
+    if maximum == 0:
+        df["Normalized"] = 0
+    else:
+        df["Normalized"] = (
+            df["Hawkes_Intensity"] / maximum
+        ) * 10
+
+    # -----------------------------------------
+    # Top Hotspots
+    # -----------------------------------------
+
+    hotspots = (
+        df.sort_values(
+            "Normalized",
+            ascending=False
+        )
+        .head(8)
+    )
+
+    # -----------------------------------------
+    # Heatmap Points
+    # -----------------------------------------
+
+    heatmap = []
+
+    for row in df.itertuples():
+
+        heatmap.append({
+
+            "grid_id": row.Grid_ID,
+
+            "lat": float(row.Latitude),
+
+            "lng": float(row.Longitude),
+
+            "intensity": round(
+                float(row.Normalized),
+                2
+            )
+
+        })
+
+    # -----------------------------------------
+    # Hotspot Panel
+    # -----------------------------------------
+
+    top = []
+
+    for row in hotspots.itertuples():
+
+        top.append({
+
+            "grid_id": row.Grid_ID,
+
+            "area": row.Village_Area_Name,
+
+            "station": row.UnitName,
+
+            "intensity": round(
+                float(row.Normalized),
+                2
+            )
+
+        })
+
+    return jsonify({
+
+        "heatmap": heatmap,
+
+        "top_hotspots": top
+
+    })
 # @app.route("/statistics", methods=["GET"])
 # def statistics():
 
@@ -541,6 +904,121 @@ def get_police_stations():
         "success": True,
         "stations": stations
     })
+
+@app.route("/dashboard-analytics", methods=["GET"])
+def dashboard_analytics():
+
+    global prediction_cache
+    global station_df
+
+    if prediction_cache is None:
+        generate_prediction_cache()
+
+    high = sum(
+        1 for p in prediction_cache
+        if p["risk_level"] == 2
+    )
+
+    medium = sum(
+        1 for p in prediction_cache
+        if p["risk_level"] == 1
+    )
+
+    low = sum(
+        1 for p in prediction_cache
+        if p["risk_level"] == 0
+    )
+
+    conn = get_connection()
+
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM citizen_reports")
+
+    citizen_reports = cursor.fetchone()[0]
+
+    cursor.close()
+    conn.close()
+
+    trend = (
+    history_full
+    .groupby(["Year", "Week"])["Crime_Count"]
+    .sum()
+    .reset_index()
+)
+
+    trend["label"] = (
+    trend["Year"].astype(str)
+    + "-W" +
+    trend["Week"].astype(str)
+)
+
+    return jsonify({
+
+    "cards": {
+
+        "total_grids": len(prediction_cache),
+
+        "high_risk": high,
+
+        "medium_risk": medium,
+
+        "low_risk": low,
+
+        "citizen_reports": citizen_reports,
+
+        "police_stations": station_df["UnitName"].nunique()
+
+    },
+
+   "crime_trend":
+    trend[["label", "Crime_Count"]]
+    .tail(20)
+    .rename(columns={
+        "label": "week",
+        "Crime_Count": "crime_count"
+    })
+    .to_dict(orient="records")
+
+})
+
+@app.route("/heatmap-data", methods=["GET"])
+def heatmap_data():
+
+    heatmap_file = os.path.join(
+        BASE_DIR,
+        "cache",
+        "kde_heatmap.json"
+    )
+
+    if not os.path.exists(heatmap_file):
+        return jsonify({
+            "error": "KDE cache not found."
+        }), 404
+
+    with open(heatmap_file, "r") as f:
+        data = json.load(f)
+
+    return jsonify(data)
+
+# Visualization endpoints 
+
+@app.route("/lstm-trend", methods=["GET"])
+def lstm_trend():
+
+    # Example data
+    data = [
+        {"week": 1, "risk": 0},
+        {"week": 2, "risk": 0},
+        {"week": 3, "risk": 1},
+        {"week": 4, "risk": 1},
+        {"week": 5, "risk": 2},
+        {"week": 6, "risk": 2},
+        {"week": 7, "risk": 1},
+        {"week": 8, "risk": 2},
+    ]
+
+    return jsonify(data)
 # ==========================================================
 # RUN SERVER
 # ==========================================================

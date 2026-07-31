@@ -2,9 +2,8 @@ import { useEffect, useState } from "react";
 import axios from "axios";
 
 import DashboardLayout from "../layouts/DashboardLayout";
-import PatrolCard from "../components/PatrolCard";
 import PatrolMap from "../components/PatrolMap";
-import PatrolStationList from "../components/PatrolStationList";
+import PoliceStationSelect from "../components/PoliceStationSelect";
 import PatrolDetails from "../components/PatrolDetails";
 
 export default function Patrol() {
@@ -59,54 +58,61 @@ export default function Patrol() {
   });
   }, [selectedStation]);
   return (
-<DashboardLayout>
+  <DashboardLayout>
 
-    <h1 className="text-3xl font-bold mb-6">
+    <div className="space-y-6">
+
+      <h1 className="text-3xl font-bold">
         Patrol Optimization
-    </h1>
+      </h1>
 
-    {loading ? (
+      {loading ? (
 
         <p>Loading patrol routes...</p>
 
-    ) : (
+      ) : (
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <>
 
-            {/* LEFT COLUMN */}
+          <PoliceStationSelect
+            stations={stations}
+            selectedStation={selectedStation}
+            onSelect={setSelectedStation}
+          />
 
-           <div>
+          <div className="grid lg:grid-cols-10 gap-6">
 
-   <PatrolStationList
-    stations={stations}
-    selectedStation={selectedStation}
-    onSelect={setSelectedStation}
-/>
+            {/* Left Panel */}
 
-    <PatrolDetails
-        station={selectedStation}
-        vehicles={patrols}
-    />
+            <div className="lg:col-span-3">
 
-</div>
-
-            {/* RIGHT COLUMN */}
-
-            <div>
-
-                <PatrolMap
-                    station={selectedStation}
-                    vehicles={patrols}
-                />
+              <PatrolDetails
+                station={selectedStation}
+                vehicles={patrols}
+              />
 
             </div>
 
-        </div>
+            {/* Right Panel */}
 
-    )}
+            <div className="lg:col-span-7">
 
-</DashboardLayout>
+              <PatrolMap
+                station={selectedStation}
+                vehicles={patrols}
+              />
 
-  );
+            </div>
+
+          </div>
+
+        </>
+
+      )}
+
+    </div>
+
+  </DashboardLayout>
+);
 
 }
