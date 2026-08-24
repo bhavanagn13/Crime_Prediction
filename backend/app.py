@@ -114,19 +114,19 @@ grid_coordinates["Grid_ID"] = (
 # LOAD GCN DATA
 # ==========================================================
 
-# gcn_nodes = pd.read_csv(
-#     os.path.join(DATASET_PATH, "GCN_Node_Features.csv")
-# )
+gcn_nodes = pd.read_csv(
+    os.path.join(DATASET_PATH, "GCN_Node_Features.csv")
+)
 
 gcn_edges = pd.read_csv(
     os.path.join(DATASET_PATH, "GCN_Edges.csv")
 )
 
-# gcn_nodes["Grid_ID"] = (
-#     gcn_nodes["Grid_ID"]
-#     .astype(str)
-#     .str.strip()
-# )
+gcn_nodes["Grid_ID"] = (
+    gcn_nodes["Grid_ID"]
+    .astype(str)
+    .str.strip()
+)
 
 gcn_edges["Source"] = (
     gcn_edges["Source"]
@@ -169,17 +169,12 @@ MAX_CRIME_VAL = float(
 hawkes_df = load_hawkes_dataset()
 print(hawkes_df.columns.tolist())
 
-predictor = None
-
-def get_predictor():
-    global predictor
-
-    if predictor is None:
-        predictor = CrimePredictor(
-            ...
-        )
-
-    return predictor
+predictor = CrimePredictor(
+    load_lstm_model(),
+    load_gcn_model(),
+    load_hawkes_dataset(),
+    *load_graph()
+)
 
 # =====================================================
 # Prediction Cache
@@ -247,19 +242,19 @@ def predict_single_grid(grid_id, demo_mode=False):
     # MODEL PREDICTIONS
     # ------------------------------------------------------
 
-    lstm_prediction = get_predictor().predict_lstm(
+    lstm_prediction = predictor.predict_lstm(
         last_four_weeks
     )
 
-    gcn_prediction = get_predictor().predict_gcn(
+    gcn_prediction = predictor.predict_gcn(
         grid_id
     )
 
-    hawkes_prediction = get_predictor().get_hawkes_score(
+    hawkes_prediction = predictor.get_hawkes_score(
         grid_id
     )
 
-    final_prediction =get_predictor().get_final_risk(
+    final_prediction = predictor.get_final_risk(
         grid_id,
         last_four_weeks
     )
@@ -1071,11 +1066,11 @@ def lstm_trend():
 # ==========================================================
 # RUN SERVER
 # ==========================================================
-# print("Loading prediction cache...")
+print("Loading prediction cache...")
 
-# generate_prediction_cache()
+generate_prediction_cache()
 
-# print("Prediction cache ready.\n")
+print("Prediction cache ready.\n")
 
 if __name__ == "__main__":
 
