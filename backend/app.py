@@ -169,12 +169,17 @@ MAX_CRIME_VAL = float(
 hawkes_df = load_hawkes_dataset()
 print(hawkes_df.columns.tolist())
 
-predictor = CrimePredictor(
-    load_lstm_model(),
-    load_gcn_model(),
-    load_hawkes_dataset(),
-    *load_graph()
-)
+predictor = None
+
+def get_predictor():
+    global predictor
+
+    if predictor is None:
+        predictor = CrimePredictor(
+            ...
+        )
+
+    return predictor
 
 # =====================================================
 # Prediction Cache
@@ -242,19 +247,19 @@ def predict_single_grid(grid_id, demo_mode=False):
     # MODEL PREDICTIONS
     # ------------------------------------------------------
 
-    lstm_prediction = predictor.predict_lstm(
+    lstm_prediction = get_predictor().predict_lstm(
         last_four_weeks
     )
 
-    gcn_prediction = predictor.predict_gcn(
+    gcn_prediction = get_predictor().predict_gcn(
         grid_id
     )
 
-    hawkes_prediction = predictor.get_hawkes_score(
+    hawkes_prediction = get_predictor().get_hawkes_score(
         grid_id
     )
 
-    final_prediction = predictor.get_final_risk(
+    final_prediction =get_predictor().get_final_risk(
         grid_id,
         last_four_weeks
     )
