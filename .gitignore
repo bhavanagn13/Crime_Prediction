@@ -11,7 +11,6 @@ env/
 backend/datasets/
 
 #data
-data/
 
 # VS Code settings
 .vscode/
@@ -29,3 +28,5 @@ backend/cache/
 
 backend/test_*.py
 backend/police_credentials.csv
+backend/isrgrootx1.pem
+data/FIR_Details_Data.csv
