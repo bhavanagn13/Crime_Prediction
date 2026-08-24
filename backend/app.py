@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify,session
+from auth import auth_bp, get_current_user
 from patrol import recommend_patrols
 from community import community_bp
 import pandas as pd
@@ -17,8 +18,17 @@ import numpy as np
 import json
 
 app = Flask(__name__)
-CORS(app)
+app.config["SECRET_KEY"] = "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET"
+
+CORS(
+    app,
+    supports_credentials=True,
+    origins=["http://localhost:5173"]
+)
+
+app.register_blueprint(auth_bp)
 app.register_blueprint(community_bp)
+
 # ==========================================================
 # PATHS
 # ==========================================================
@@ -464,12 +474,21 @@ def predict():
 # ==========================================================
 @app.route("/predict-all", methods=["GET"])
 def predict_all():
-
-    print("Entered /predict-all")
-
+    """Return predictions. Police users are restricted to their own station."""
     results = generate_prediction_cache()
 
-    print(f"Returning {len(results)} cached predictions.")
+    user = get_current_user()
+
+    if user and user.get("role") == "POLICE":
+        station = user.get("police_station")
+        if not station:
+            return jsonify({
+                "error": "Police station is not assigned to this account."
+            }), 400
+        results = [
+            item for item in results
+            if item.get("police_station") == station
+        ]
 
     return jsonify(results)
 
@@ -701,7 +720,7 @@ def hawkes_heatmap():
             "Normalized",
             ascending=False
         )
-        .head(8)
+        .head(10)
     )
 
     # -----------------------------------------
@@ -838,26 +857,43 @@ def home():
 
 @app.route("/patrol-optimization", methods=["POST"])
 def patrol_optimization():
-
     try:
+        user = get_current_user()
 
-        print("Entered /patrol-optimization")
-
-        data = request.get_json()
-
-        if not data:
+        if user is None:
             return jsonify({
                 "success": False,
-                "error": "Request body is missing."
-            }), 400
+                "error": "Authentication required."
+            }), 401
 
-        if "police_station" not in data:
+        data = request.get_json(silent=True) or {}
+
+        # Police: station MUST come from the authenticated account.
+        if user["role"] == "POLICE":
+            police_station = (user.get("police_station") or "").strip()
+            if not police_station:
+                return jsonify({
+                    "success": False,
+                    "error": "Police station is not assigned to this account."
+                }), 400
+
+        # Admin: station may be selected by the frontend.
+        elif user["role"] == "ADMIN":
+            police_station = str(
+                data.get("police_station", "")
+            ).strip()
+
+            if not police_station:
+                return jsonify({
+                    "success": False,
+                    "error": "police_station is required for admin."
+                }), 400
+
+        else:
             return jsonify({
                 "success": False,
-                "error": "police_station is required."
-            }), 400
-
-        police_station = data["police_station"].strip()
+                "error": "You do not have permission to access patrol optimization."
+            }), 403
 
         predictions = generate_prediction_cache()
 
@@ -867,43 +903,51 @@ def patrol_optimization():
         )
 
         return jsonify({
-
             "success": True,
-
             "police_station": police_station,
-
             "total_grids": len(predictions),
-
             "patrols": patrol_plan
-
-        })
+        }), 200
 
     except Exception as e:
-
         return jsonify({
-
             "success": False,
-
             "error": str(e)
-
         }), 500
+
 
 @app.route("/police-stations", methods=["GET"])
 def get_police_stations():
+    user = get_current_user()
+
+    if user is None:
+        return jsonify({"error": "Authentication required."}), 401
+
+    if user["role"] == "POLICE":
+        station = (user.get("police_station") or "").strip()
+        if not station:
+            return jsonify({"error": "Police station is not assigned."}), 400
+        return jsonify({
+            "success": True,
+            "stations": [station]
+        }), 200
+
+    if user["role"] != "ADMIN":
+        return jsonify({"error": "You do not have permission to access police stations."}), 403
 
     predictions = generate_prediction_cache()
 
-    stations = sorted(
-        list({
-            prediction["police_station"]
-            for prediction in predictions
-        })
-    )
+    stations = sorted({
+        prediction["police_station"]
+        for prediction in predictions
+        if prediction.get("police_station")
+    })
 
     return jsonify({
         "success": True,
         "stations": stations
-    })
+    }), 200
+
 
 @app.route("/dashboard-analytics", methods=["GET"])
 def dashboard_analytics():

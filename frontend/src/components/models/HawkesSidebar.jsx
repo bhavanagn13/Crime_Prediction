@@ -67,15 +67,13 @@ export default function HawkesSidebar() {
 
             <div className="bg-white rounded-xl shadow-md p-4">
 
-                <h2 className="text-lg font-bold mb-4">
-
-                    🔥 Top Hotspots
-
-                </h2>
+                <h2 className="text-xl font-bold mb-4">
+     Top 10 High-Intensity Areas
+</h2>
 
                 {
 
-                    data.top_hotspots.map((spot, index) => (
+                    data.top_hotspots.slice(0, 10).map((spot, index) => (
 
                         <div
                             key={spot.grid_id}

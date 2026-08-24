@@ -1,9 +1,11 @@
 import AppRoutes from "./routes/AppRoutes";
-import Prediction from "./pages/Prediction";
+import { AuthProvider } from "./context/AuthContext";
 
+export default function App() {
 
-export default function App(){
-
-    return <AppRoutes/>;
-
+    return (
+        <AuthProvider>
+            <AppRoutes />
+        </AuthProvider>
+    );
 }

@@ -1,149 +1,251 @@
-import {
-    FaChartBar,
-    FaMapMarkedAlt,
-    FaRoute,
-    FaClipboardList,
-    FaRegEdit,
-    FaBrain,
-    FaTimes
-} from "react-icons/fa";
-
 import { NavLink } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
+
+import {
+    FiHome,
+    FiActivity,
+    FiMap,
+    FiFileText,
+    FiX,
+    FiShield,
+    FiUsers
+} from "react-icons/fi";
 
 export default function Sidebar({ isOpen, onClose }) {
 
-    return (
+    const { user } = useAuth();
+    const role = user?.role;
 
+    const links =
+        role === "ADMIN"
+            ? [
+                {
+                    to: "/",
+                    label: "Dashboard",
+                    icon: FiHome
+                },
+                {
+                    to: "/prediction",
+                    label: "Crime Analysis",
+                    icon: FiActivity
+                },
+                {
+                    to: "/patrol",
+                    label: "Patrol Optimization",
+                    icon: FiMap
+                },
+                {
+                    to: "/reports",
+                    label: "Community Reports",
+                    icon: FiFileText
+                },
+                {
+                    to: "/admin-management",
+                    label: "Admin Management",
+                    icon: FiUsers
+                }
+            ]
+            : [
+                {
+                    to: "/police",
+                    label: "Dashboard",
+                    icon: FiHome
+                },
+                {
+                    to: "/prediction",
+                    label: "Crime Analysis",
+                    icon: FiActivity
+                },
+                {
+                    to: "/patrol",
+                    label: "Patrol Optimization",
+                    icon: FiMap
+                },
+                {
+                    to: "/reports",
+                    label: "Community Reports",
+                    icon: FiFileText
+                }
+            ];
+
+    return (
         <aside
             className={`
-                fixed z-[2000] 
-                top-0
-                left-0
-                h-screen
-                w-64
-                bg-slate-900
-                text-white
-                z-50
-                shadow-2xl
-                transform
-                transition-transform
-                duration-300
-                ease-in-out
-                ${isOpen ? "translate-x-0" : "-translate-x-full"}
+                fixed left-0 top-0 bottom-0 z-[2000]
+                w-72 bg-slate-900 text-white shadow-2xl
+                transform transition-transform duration-200
+                ${
+                    isOpen
+                        ? "translate-x-0"
+                        : "-translate-x-full"
+                }
             `}
         >
 
-            {/* Header */}
+            {/* HEADER */}
 
-            <div className="flex items-center justify-between p-6 border-b border-slate-700">
+            <div
+                className="
+                    flex
+                    items-center
+                    justify-between
+                    px-6
+                    py-5
+                    border-b
+                    border-slate-700
+                "
+            >
 
-                <div>
+                <div className="flex items-center gap-3">
 
-                    <h1 className="text-xl font-bold">
+                    <div
+                        className="
+                            w-9
+                            h-9
+                            rounded-lg
+                            bg-blue-600
+                            flex
+                            items-center
+                            justify-center
+                            font-bold
+                        "
+                    >
+                        CI
+                    </div>
 
-                        🛡 Bengaluru Police
+                    <div>
 
-                    </h1>
+                        <div className="font-semibold">
+                            Crime Intelligence
+                        </div>
 
-                    <p className="text-sm text-slate-400 mt-1">
+                        <div className="text-xs text-slate-400">
+                            {role === "ADMIN"
+                                ? "Administration"
+                                : "Police Operations"}
+                        </div>
 
-                        CrimeVision AI
-
-                    </p>
+                    </div>
 
                 </div>
 
                 <button
                     onClick={onClose}
-                    className="text-xl hover:text-red-400 transition"
+                    className="
+                        p-2
+                        rounded-lg
+                        hover:bg-slate-800
+                    "
+                    aria-label="Close menu"
                 >
-                    <FaTimes />
+                    <FiX size={20} />
                 </button>
 
             </div>
 
-            {/* Navigation */}
 
-            <nav className="mt-6">
+            {/* POLICE STATION */}
 
-                <SidebarItem
-                    to="/"
-                    icon={<FaChartBar />}
-                    title="Dashboard"
-                    onClose={onClose}
-                />
+            {role === "POLICE" && (
 
-                <SidebarItem
-                    to="/prediction"
-                    icon={<FaMapMarkedAlt />}
-                    title="Prediction"
-                    onClose={onClose}
-                />
+                <div
+                    className="
+                        mx-4
+                        mt-5
+                        rounded-xl
+                        bg-slate-800
+                        px-4
+                        py-3
+                    "
+                >
 
-                <SidebarItem
-    to="/ai-models"
-    icon={<FaBrain />}
-    title="AI Model Visualizations"
-    onClose={onClose}
-/>
+                    <div
+                        className="
+                            flex
+                            items-center
+                            gap-2
+                            text-xs
+                            text-slate-400
+                        "
+                    >
 
-                <SidebarItem
-                    to="/patrol"
-                    icon={<FaRoute />}
-                    title="Patrol Routes"
-                    onClose={onClose}
-                />
+                        <FiShield size={14} />
 
-               <SidebarItem
-    to="/community-reports"
-    icon={<FaClipboardList />}
-    title="Community Reports"
-    onClose={onClose}
-/>
+                        Assigned station
 
-<SidebarItem
-    to="/citizen-report"
-    icon={<FaRegEdit />}
-    title="Citizen Report"
-    onClose={onClose}
-/>
+                    </div>
+
+                    <div
+                        className="
+                            mt-1
+                            text-sm
+                            font-semibold
+                        "
+                    >
+                        {user?.police_station || "Not assigned"}
+                    </div>
+
+                </div>
+
+            )}
 
 
+            {/* NAVIGATION */}
+
+            <nav
+                className="
+                    px-4
+                    py-5
+                    space-y-2
+                "
+            >
+
+                {links.map(
+                    ({
+                        to,
+                        label,
+                        icon: Icon
+                    }) => (
+
+                        <NavLink
+                            key={to}
+                            to={to}
+                            onClick={onClose}
+                            end={
+                                to === "/" ||
+                                to === "/police"
+                            }
+                            className={({ isActive }) =>
+                                `
+                                flex
+                                items-center
+                                gap-3
+                                px-4
+                                py-3
+                                rounded-xl
+                                text-sm
+                                font-medium
+                                transition
+                                ${
+                                    isActive
+                                        ? "bg-blue-600 text-white"
+                                        : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                                }
+                                `
+                            }
+                        >
+
+                            <Icon size={18} />
+
+                            {label}
+
+                        </NavLink>
+
+                    )
+                )}
 
             </nav>
 
         </aside>
-
     );
-
-}
-
-function SidebarItem({ icon, title, to, onClose }) {
-
-    return (
-
-        <NavLink
-            to={to}
-            onClick={onClose}
-            className={({ isActive }) =>
-                `flex items-center gap-4 px-6 py-4 transition-all duration-200 ${
-                    isActive
-                        ? "bg-slate-800 border-l-4 border-blue-500 text-white"
-                        : "text-slate-300 hover:bg-slate-800 hover:text-white"
-                }`
-            }
-        >
-
-            <span className="text-lg">
-                {icon}
-            </span>
-
-            <span className="font-medium">
-                {title}
-            </span>
-
-        </NavLink>
-
-    );
-
 }

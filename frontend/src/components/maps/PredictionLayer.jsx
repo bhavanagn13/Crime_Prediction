@@ -2,64 +2,88 @@ import { CircleMarker, Popup } from "react-leaflet";
 
 export default function PredictionLayer({ hotspots }) {
 
+    // Only show AI-predicted HIGH-RISK locations
+    const highRiskSpots = hotspots.filter(
+        spot => spot.risk_level === 2
+    );
+
     return (
-
         <>
-            {hotspots.map((spot, index) => {
+            {highRiskSpots.map((spot, index) => {
 
-                let color = "#22c55e";
-                let label = "Low";
+                const lat = spot?.coordinates?.lat;
+                const lng = spot?.coordinates?.lng;
 
-                if (spot.risk_level === 1) {
-                    color = "#f59e0b";
-                    label = "Medium";
-                }
-
-                if (spot.risk_level === 2) {
-                    color = "#ef4444";
-                    label = "High";
+                // Ignore invalid coordinates
+                if (
+                    lat === undefined ||
+                    lng === undefined ||
+                    lat === 0 ||
+                    lng === 0
+                ) {
+                    return null;
                 }
 
                 return (
+                    <div key={spot.grid_id || index}>
 
-                    <CircleMarker
-                        key={index}
-                        center={[
-                            spot.coordinates.lat,
-                            spot.coordinates.lng
-                        ]}
-                        radius={7}
-                        pathOptions={{
-                            color,
-                            fillColor: color,
-                            fillOpacity: 0.9,
-                            weight: 2
-                        }}
-                    >
+                        {/* Outer glow */}
+                        <CircleMarker
+                            center={[lat, lng]}
+                            radius={16}
+                            pathOptions={{
+                                color: "#ff3333",
+                                fillColor: "#ff3333",
+                                fillOpacity: 0.12,
+                                weight: 2,
+                                className: "prediction-glow"
+                            }}
+                        />
 
-                        <Popup>
+                        {/* Main glowing spot */}
+                        <CircleMarker
+                            center={[lat, lng]}
+                            radius={7}
+                            pathOptions={{
+                                color: "#ff0000",
+                                fillColor: "#ff2222",
+                                fillOpacity: 0.9,
+                                weight: 2
+                            }}
+                        >
 
-                            <b>{spot.area_name}</b>
+                            <Popup>
 
-                            <hr />
+                                <b>AI Predicted Hotspot</b>
 
-                            <b>Risk:</b> {label}<br/>
+                                <hr />
 
-                            <b>Grid:</b> {spot.grid_id}<br/>
+                                <b>Area:</b>{" "}
+                                {spot.area_name}
 
-                            <b>Police Station:</b><br/>
+                                <br />
 
-                            {spot.police_station}
+                                <b>Risk:</b>{" "}
+                                High
 
-                        </Popup>
+                                <br />
 
-                    </CircleMarker>
+                                <b>Grid:</b>{" "}
+                                {spot.grid_id}
 
+                                <br />
+
+                                <b>Police Station:</b>{" "}
+                                {spot.police_station}
+
+                            </Popup>
+
+                        </CircleMarker>
+
+                    </div>
                 );
 
             })}
         </>
-
     );
-
 }
