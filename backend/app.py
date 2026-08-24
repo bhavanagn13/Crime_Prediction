@@ -114,19 +114,19 @@ grid_coordinates["Grid_ID"] = (
 # LOAD GCN DATA
 # ==========================================================
 
-gcn_nodes = pd.read_csv(
-    os.path.join(DATASET_PATH, "GCN_Node_Features.csv")
-)
+# gcn_nodes = pd.read_csv(
+#     os.path.join(DATASET_PATH, "GCN_Node_Features.csv")
+# )
 
 gcn_edges = pd.read_csv(
     os.path.join(DATASET_PATH, "GCN_Edges.csv")
 )
 
-gcn_nodes["Grid_ID"] = (
-    gcn_nodes["Grid_ID"]
-    .astype(str)
-    .str.strip()
-)
+# gcn_nodes["Grid_ID"] = (
+#     gcn_nodes["Grid_ID"]
+#     .astype(str)
+#     .str.strip()
+# )
 
 gcn_edges["Source"] = (
     gcn_edges["Source"]
@@ -1071,11 +1071,11 @@ def lstm_trend():
 # ==========================================================
 # RUN SERVER
 # ==========================================================
-print("Loading prediction cache...")
+# print("Loading prediction cache...")
 
-generate_prediction_cache()
+# generate_prediction_cache()
 
-print("Prediction cache ready.\n")
+# print("Prediction cache ready.\n")
 
 if __name__ == "__main__":
 
