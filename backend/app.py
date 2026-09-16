@@ -1,17 +1,33 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify,session
+from auth import auth_bp, get_current_user
+from patrol import recommend_patrols
+from community import community_bp
 import pandas as pd
 import os
-
+from flask_cors import CORS
+from db import get_connection
 from model_loader import (
     load_lstm_model,
     load_gcn_model,
     load_hawkes_dataset,
     load_graph
 )
-
 from prediction import CrimePredictor
+from sklearn.neighbors import KernelDensity
+import numpy as np
+import json
 
 app = Flask(__name__)
+app.config["SECRET_KEY"] = "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET"
+
+CORS(
+    app,
+    supports_credentials=True,
+    origins=["http://localhost:5173"]
+)
+
+app.register_blueprint(auth_bp)
+app.register_blueprint(community_bp)
 
 # ==========================================================
 # PATHS
@@ -21,6 +37,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_PATH = os.path.join(BASE_DIR, "datasets")
 DATA_ROOT = os.path.join(os.path.dirname(BASE_DIR), "data")
 METADATA_PATH = os.path.join(os.path.dirname(BASE_DIR), "metadata")
+
 
 # ==========================================================
 # LOAD STATION INFORMATION
@@ -35,7 +52,7 @@ def load_station_data():
     station_master = pd.read_csv(
         os.path.join(
             METADATA_PATH,
-            "PoliceStation_Master.csv"
+            "correct_policestation_coords.csv"
         )
     )
 
@@ -47,6 +64,21 @@ def load_station_data():
 
 
 station_df = load_station_data()
+
+#LOAD GRID LOCATIONS
+# ------------------------------------------------------
+# LOAD GRID LOCATIONS
+# ------------------------------------------------------
+
+grid_locations = pd.read_csv(
+    os.path.join(DATASET_PATH, "corrected_grid_coords.csv")
+)
+
+grid_locations["Grid_ID"] = (
+    grid_locations["Grid_ID"]
+    .astype(str)
+    .str.strip()
+)
 
 # ==========================================================
 # LOAD GRID MAP
@@ -65,6 +97,48 @@ grid_map["Grid_ID"] = (
     .str.strip()
 )
 
+grid_coordinates = pd.read_csv(
+    os.path.join(
+        DATASET_PATH,
+        "corrected_grid_coords.csv"
+    )
+)
+
+grid_coordinates["Grid_ID"] = (
+    grid_coordinates["Grid_ID"]
+    .astype(str)
+    .str.strip()
+)
+
+# ==========================================================
+# LOAD GCN DATA
+# ==========================================================
+
+gcn_nodes = pd.read_csv(
+    os.path.join(DATASET_PATH, "GCN_Node_Features.csv")
+)
+
+gcn_edges = pd.read_csv(
+    os.path.join(DATASET_PATH, "GCN_Edges.csv")
+)
+
+gcn_nodes["Grid_ID"] = (
+    gcn_nodes["Grid_ID"]
+    .astype(str)
+    .str.strip()
+)
+
+gcn_edges["Source"] = (
+    gcn_edges["Source"]
+    .astype(str)
+    .str.strip()
+)
+
+gcn_edges["Target"] = (
+    gcn_edges["Target"]
+    .astype(str)
+    .str.strip()
+)
 # ==========================================================
 # LOAD WEEKLY HISTORY
 # ==========================================================
@@ -75,6 +149,8 @@ history_full = pd.read_csv(
         "Weekly_Risk_Dataset.csv"
     )
 )
+
+print(history_full.columns.tolist())
 
 history_full["Grid_ID"] = (
     history_full["Grid_ID"]
@@ -90,6 +166,9 @@ MAX_CRIME_VAL = float(
 # LOAD MODELS
 # ==========================================================
 
+hawkes_df = load_hawkes_dataset()
+print(hawkes_df.columns.tolist())
+
 predictor = CrimePredictor(
     load_lstm_model(),
     load_gcn_model(),
@@ -97,6 +176,11 @@ predictor = CrimePredictor(
     *load_graph()
 )
 
+# =====================================================
+# Prediction Cache
+# =====================================================
+
+prediction_cache = None
 # ==========================================================
 # COMMON PREDICTION FUNCTION
 # ==========================================================
@@ -191,28 +275,38 @@ def predict_single_grid(grid_id, demo_mode=False):
 
     else:
 
-        station_name = loc_row.iloc[0]["UnitName"]
-        area_name = loc_row.iloc[0]["Village_Area_Name"]
+     station_name = loc_row.iloc[0]["UnitName"]
+     area_name = loc_row.iloc[0]["Village_Area_Name"]
 
-        s_info = station_df[
-            station_df["UnitName"] == station_name
-        ]
+    # Default to police station coordinates
+     s_info = station_df[
+        station_df["UnitName"] == station_name
+     ]
 
-        if s_info.empty:
+     if s_info.empty:
+        lat = 0.0
+        lng = 0.0
+     else:
+        lat = float(s_info.iloc[0]["Average_Latitude"])
+        lng = float(s_info.iloc[0]["Average_Longitude"])
 
-            lat = 0.0
-            lng = 0.0
+    # Try to use grid coordinates if they are valid
+     coord_row = grid_locations[
+        grid_locations["Grid_ID"] == grid_id
+     ]
 
-        else:
+     if not coord_row.empty:
 
-            lat = float(
-                s_info.iloc[0]["Average_Latitude"]
-            )
+        temp_lat = float(coord_row.iloc[0]["Latitude"])
+        temp_lng = float(coord_row.iloc[0]["Longitude"])
 
-            lng = float(
-                s_info.iloc[0]["Average_Longitude"]
-            )
-
+        # Accept only Bengaluru coordinates
+        if (
+            12.7 <= temp_lat <= 13.2 and
+            77.3 <= temp_lng <= 77.9
+        ):
+            lat = temp_lat
+            lng = temp_lng
     # ------------------------------------------------------
     # RETURN RESULT
     # ------------------------------------------------------
@@ -246,7 +340,101 @@ def predict_single_grid(grid_id, demo_mode=False):
 
     }
 
+def generate_prediction_cache():
+    """
+    Generates predictions for all grids only once and
+    stores them in memory.
 
+    Subsequent calls return the cached predictions.
+    """
+
+    global prediction_cache
+
+    # Return cached results if already generated
+    if prediction_cache is not None:
+        print("Using cached predictions.")
+        return prediction_cache
+
+    print("\n========================================")
+    print("Generating prediction cache...")
+    print("========================================")
+
+    results = []
+
+    unique_grids = grid_map["Grid_ID"].dropna().unique()
+
+    total = len(unique_grids)
+
+    print(f"Total grids: {total}")
+
+    for i, grid_id in enumerate(unique_grids):
+
+        print(f"Processing {i + 1}/{total} : {grid_id}")
+
+        prediction = predict_single_grid(grid_id)
+
+        results.append(prediction)
+
+    prediction_cache = results
+
+    print("========================================")
+    print(f"Prediction cache generated successfully.")
+    print(f"Cached {len(results)} predictions.")
+    print("========================================\n")
+
+    return prediction_cache
+def generate_heatmap_data():
+
+    global history_full, grid_coordinates
+
+    # Historical crime count per grid
+    heatmap_df = (
+        history_full
+        .groupby("Grid_ID", as_index=False)["Crime_Count"]
+        .sum()
+    )
+
+    heatmap_df["Grid_ID"] = (
+        heatmap_df["Grid_ID"]
+        .astype(str)
+        .str.strip()
+    )
+
+    merged = heatmap_df.merge(
+        grid_coordinates,
+        on="Grid_ID",
+        how="inner"
+    )
+
+    coords = merged[["Latitude", "Longitude"]].values
+
+    # Weight each point by crime count
+    sample_weights = merged["Crime_Count"].values
+
+    kde = KernelDensity(
+        kernel="gaussian",
+        bandwidth=0.01
+    )
+
+    kde.fit(coords, sample_weight=sample_weights)
+
+    log_density = kde.score_samples(coords)
+
+    density = np.exp(log_density)
+
+    density = density / density.max()
+
+    merged["Density"] = density
+
+    return [
+        {
+            "grid_id": row.Grid_ID,
+            "lat": float(row.Latitude),
+            "lng": float(row.Longitude),
+            "weight": float(row.Density)
+        }
+        for row in merged.itertuples()
+    ]
 # ==========================================================
 # PREDICT SINGLE GRID
 # ==========================================================
@@ -284,52 +472,363 @@ def predict():
 # ==========================================================
 # PREDICT ALL GRIDS
 # ==========================================================
-
 @app.route("/predict-all", methods=["GET"])
 def predict_all():
-    print("Entered /predict-all")
+    """Return predictions. Police users are restricted to their own station."""
+    results = generate_prediction_cache()
 
-    results = []
+    user = get_current_user()
 
-    unique_grids = grid_map["Grid_ID"].dropna().unique()
-
-    print(f"Total grids: {len(unique_grids)}")
-
-    for i, grid_id in enumerate(unique_grids):
-
-        print(f"Processing {i+1}/{len(unique_grids)} : {grid_id}")
-
-        prediction = predict_single_grid(grid_id)
-        results.append(prediction)
-
-    print("Finished!")
+    if user and user.get("role") == "POLICE":
+        station = user.get("police_station")
+        if not station:
+            return jsonify({
+                "error": "Police station is not assigned to this account."
+            }), 400
+        results = [
+            item for item in results
+            if item.get("police_station") == station
+        ]
 
     return jsonify(results)
 
+# @app.route("/predict-all", methods=["GET"])
+# def predict_all():
+#     print("Entered /predict-all")
+
+#     results = []
+
+#     unique_grids = grid_map["Grid_ID"].dropna().unique()
+
+#     print(f"Total grids: {len(unique_grids)}")
+
+#     for i, grid_id in enumerate(unique_grids):
+
+#         print(f"Processing {i+1}/{len(unique_grids)} : {grid_id}")
+
+#         prediction = predict_single_grid(grid_id)
+#         results.append(prediction)
+
+#     print("Finished!")
+
+#     return jsonify(results)
+@app.route("/gcn-graph", methods=["GET"])
+def gcn_graph():
+
+    predictions = generate_prediction_cache()
+
+    prediction_map = {
+        p["grid_id"]: p
+        for p in predictions
+    }
+
+    # -------------------------------------------------
+    # Split by risk
+    # -------------------------------------------------
+
+    high = []
+    medium = []
+    low = []
+
+    for p in predictions:
+
+        if p["risk_level"] == 2:
+            high.append(p["grid_id"])
+
+        elif p["risk_level"] == 1:
+            medium.append(p["grid_id"])
+
+        else:
+            low.append(p["grid_id"])
+
+    selected = set()
+
+    selected.update(high[:10])
+    selected.update(medium[:10])
+    selected.update(low[:10])
+
+    # -------------------------------------------------
+    # Build Nodes (with coordinates)
+    # -------------------------------------------------
+
+    nodes = []
+
+    for grid in selected:
+
+        p = prediction_map[grid]
+
+        coord = grid_locations[
+            grid_locations["Grid_ID"] == grid
+        ]
+
+        if coord.empty:
+            continue
+
+        lat = float(coord.iloc[0]["Latitude"])
+        lng = float(coord.iloc[0]["Longitude"])
+
+        # Ignore invalid coordinates
+        if not (
+            12.7 <= lat <= 13.2 and
+            77.3 <= lng <= 77.9
+        ):
+            continue
+
+        nodes.append({
+
+            "id": grid,
+
+            "risk": p["risk_level"],
+
+            "station": p["police_station"],
+
+            "area": p["area_name"],
+
+            "lat": lat,
+
+            "lng": lng
+
+        })
+
+    # -------------------------------------------------
+    # Remove edges whose nodes don't exist
+    # -------------------------------------------------
+
+    valid_ids = {
+        node["id"]
+        for node in nodes
+    }
+
+    links = []
+
+    for row in gcn_edges.itertuples():
+
+        src = row.Source
+        dst = row.Target
+
+        if (
+            src in valid_ids and
+            dst in valid_ids
+        ):
+
+            links.append({
+
+                "source": src,
+
+                "target": dst
+
+            })
+
+    return jsonify({
+
+        "nodes": nodes,
+
+        "links": links
+
+    })
+
+@app.route("/hawkes-heatmap", methods=["GET"])
+def hawkes_heatmap():
+
+    global hawkes_df
+
+    df = hawkes_df.copy()
+    # Remove old coordinates from Hawkes dataset
+    df = df.drop(
+    columns=["Latitude", "Longitude"],
+    errors="ignore"
+)
+    # -----------------------------------------
+    # Clean IDs
+    # -----------------------------------------
+
+    df["Grid_ID"] = (
+        df["Grid_ID"]
+        .astype(str)
+        .str.strip()
+    )
+
+    # -----------------------------------------
+    # Latest Hawkes value per grid
+    # -----------------------------------------
+
+    if "Date" in df.columns:
+
+        df["Date"] = pd.to_datetime(df["Date"])
+
+        df = (
+            df.sort_values("Date")
+              .groupby("Grid_ID", as_index=False)
+              .tail(1)
+        )
+        # -----------------------------------------
+        # Use corrected Bengaluru coordinates
+       # -----------------------------------------
+
+        valid_coords = grid_locations[
+    [
+        "Grid_ID",
+        "Latitude",
+        "Longitude"
+    ]
+].copy()
+
+        valid_coords["Grid_ID"] = (
+        valid_coords["Grid_ID"]
+       .astype(str)
+       .str.strip()
+)
+
+        df = df.merge(
+    valid_coords,
+    on="Grid_ID",
+    how="inner"
+)
+
+        df = df.dropna(
+    subset=[
+        "Latitude",
+        "Longitude",
+        "Hawkes_Intensity"
+    ]
+)
+    # Bengaluru Bounding Box
+    df = df[
+        (df["Latitude"].between(12.7, 13.2)) &
+        (df["Longitude"].between(77.3, 77.9))
+    ]
+
+    # -----------------------------------------
+    # Normalize intensity to 0–10
+    # -----------------------------------------
+
+    maximum = df["Hawkes_Intensity"].max()
+
+    if maximum == 0:
+        df["Normalized"] = 0
+    else:
+        df["Normalized"] = (
+            df["Hawkes_Intensity"] / maximum
+        ) * 10
+
+    # -----------------------------------------
+    # Top Hotspots
+    # -----------------------------------------
+
+    hotspots = (
+        df.sort_values(
+            "Normalized",
+            ascending=False
+        )
+        .head(10)
+    )
+
+    # -----------------------------------------
+    # Heatmap Points
+    # -----------------------------------------
+
+    heatmap = []
+
+    for row in df.itertuples():
+
+        heatmap.append({
+
+            "grid_id": row.Grid_ID,
+
+            "lat": float(row.Latitude),
+
+            "lng": float(row.Longitude),
+
+            "intensity": round(
+                float(row.Normalized),
+                2
+            )
+
+        })
+
+    # -----------------------------------------
+    # Hotspot Panel
+    # -----------------------------------------
+
+    top = []
+
+    for row in hotspots.itertuples():
+
+        top.append({
+
+            "grid_id": row.Grid_ID,
+
+            "area": row.Village_Area_Name,
+
+            "station": row.UnitName,
+
+            "intensity": round(
+                float(row.Normalized),
+                2
+            )
+
+        })
+
+    return jsonify({
+
+        "heatmap": heatmap,
+
+        "top_hotspots": top
+
+    })
+# @app.route("/statistics", methods=["GET"])
+# def statistics():
+
+#     low = 0
+#     medium = 0
+#     high = 0
+
+#     unique_grids = grid_map["Grid_ID"].dropna().unique()
+
+#     for grid_id in unique_grids:
+
+#         prediction = predict_single_grid(grid_id)
+
+#         risk = prediction["risk_level"]
+
+#         if risk == 0:
+#             low += 1
+#         elif risk == 1:
+#             medium += 1
+#         elif risk == 2:
+#             high += 1
+
+#     return jsonify({
+#         "total_grids": len(unique_grids),
+#         "low": low,
+#         "medium": medium,
+#         "high": high
+#     })
+
 @app.route("/statistics", methods=["GET"])
 def statistics():
+
+    predictions = generate_prediction_cache()
 
     low = 0
     medium = 0
     high = 0
 
-    unique_grids = grid_map["Grid_ID"].dropna().unique()
-
-    for grid_id in unique_grids:
-
-        prediction = predict_single_grid(grid_id)
+    for prediction in predictions:
 
         risk = prediction["risk_level"]
 
         if risk == 0:
             low += 1
+
         elif risk == 1:
             medium += 1
+
         elif risk == 2:
             high += 1
 
     return jsonify({
-        "total_grids": len(unique_grids),
+        "total_grids": len(predictions),
         "low": low,
         "medium": medium,
         "high": high
@@ -356,10 +855,222 @@ def home():
 
     })
 
+@app.route("/patrol-optimization", methods=["POST"])
+def patrol_optimization():
+    try:
+        user = get_current_user()
 
+        if user is None:
+            return jsonify({
+                "success": False,
+                "error": "Authentication required."
+            }), 401
+
+        data = request.get_json(silent=True) or {}
+
+        # Police: station MUST come from the authenticated account.
+        if user["role"] == "POLICE":
+            police_station = (user.get("police_station") or "").strip()
+            if not police_station:
+                return jsonify({
+                    "success": False,
+                    "error": "Police station is not assigned to this account."
+                }), 400
+
+        # Admin: station may be selected by the frontend.
+        elif user["role"] == "ADMIN":
+            police_station = str(
+                data.get("police_station", "")
+            ).strip()
+
+            if not police_station:
+                return jsonify({
+                    "success": False,
+                    "error": "police_station is required for admin."
+                }), 400
+
+        else:
+            return jsonify({
+                "success": False,
+                "error": "You do not have permission to access patrol optimization."
+            }), 403
+
+        predictions = generate_prediction_cache()
+
+        patrol_plan = recommend_patrols(
+            predictions,
+            police_station
+        )
+
+        return jsonify({
+            "success": True,
+            "police_station": police_station,
+            "total_grids": len(predictions),
+            "patrols": patrol_plan
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route("/police-stations", methods=["GET"])
+def get_police_stations():
+    user = get_current_user()
+
+    if user is None:
+        return jsonify({"error": "Authentication required."}), 401
+
+    if user["role"] == "POLICE":
+        station = (user.get("police_station") or "").strip()
+        if not station:
+            return jsonify({"error": "Police station is not assigned."}), 400
+        return jsonify({
+            "success": True,
+            "stations": [station]
+        }), 200
+
+    if user["role"] != "ADMIN":
+        return jsonify({"error": "You do not have permission to access police stations."}), 403
+
+    predictions = generate_prediction_cache()
+
+    stations = sorted({
+        prediction["police_station"]
+        for prediction in predictions
+        if prediction.get("police_station")
+    })
+
+    return jsonify({
+        "success": True,
+        "stations": stations
+    }), 200
+
+
+@app.route("/dashboard-analytics", methods=["GET"])
+def dashboard_analytics():
+
+    global prediction_cache
+    global station_df
+
+    if prediction_cache is None:
+        generate_prediction_cache()
+
+    high = sum(
+        1 for p in prediction_cache
+        if p["risk_level"] == 2
+    )
+
+    medium = sum(
+        1 for p in prediction_cache
+        if p["risk_level"] == 1
+    )
+
+    low = sum(
+        1 for p in prediction_cache
+        if p["risk_level"] == 0
+    )
+
+    conn = get_connection()
+
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM citizen_reports")
+
+    citizen_reports = cursor.fetchone()[0]
+
+    cursor.close()
+    conn.close()
+
+    trend = (
+    history_full
+    .groupby(["Year", "Week"])["Crime_Count"]
+    .sum()
+    .reset_index()
+)
+
+    trend["label"] = (
+    trend["Year"].astype(str)
+    + "-W" +
+    trend["Week"].astype(str)
+)
+
+    return jsonify({
+
+    "cards": {
+
+        "total_grids": len(prediction_cache),
+
+        "high_risk": high,
+
+        "medium_risk": medium,
+
+        "low_risk": low,
+
+        "citizen_reports": citizen_reports,
+
+        "police_stations": station_df["UnitName"].nunique()
+
+    },
+
+   "crime_trend":
+    trend[["label", "Crime_Count"]]
+    .tail(20)
+    .rename(columns={
+        "label": "week",
+        "Crime_Count": "crime_count"
+    })
+    .to_dict(orient="records")
+
+})
+
+@app.route("/heatmap-data", methods=["GET"])
+def heatmap_data():
+
+    heatmap_file = os.path.join(
+        BASE_DIR,
+        "cache",
+        "kde_heatmap.json"
+    )
+
+    if not os.path.exists(heatmap_file):
+        return jsonify({
+            "error": "KDE cache not found."
+        }), 404
+
+    with open(heatmap_file, "r") as f:
+        data = json.load(f)
+
+    return jsonify(data)
+
+# Visualization endpoints 
+
+@app.route("/lstm-trend", methods=["GET"])
+def lstm_trend():
+
+    # Example data
+    data = [
+        {"week": 1, "risk": 0},
+        {"week": 2, "risk": 0},
+        {"week": 3, "risk": 1},
+        {"week": 4, "risk": 1},
+        {"week": 5, "risk": 2},
+        {"week": 6, "risk": 2},
+        {"week": 7, "risk": 1},
+        {"week": 8, "risk": 2},
+    ]
+
+    return jsonify(data)
 # ==========================================================
 # RUN SERVER
 # ==========================================================
+print("Loading prediction cache...")
+
+generate_prediction_cache()
+
+print("Prediction cache ready.\n")
 
 if __name__ == "__main__":
 

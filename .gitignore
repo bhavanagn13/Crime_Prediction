@@ -11,7 +11,6 @@ env/
 backend/datasets/
 
 #data
-data/
 
 # VS Code settings
 .vscode/
@@ -19,3 +18,15 @@ data/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Cache
+backend/cache/
+
+backend/test_*.py
+backend/police_credentials.csv
+backend/isrgrootx1.pem
+data/FIR_Details_Data.csv
